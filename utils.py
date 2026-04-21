@@ -77,32 +77,46 @@ def auto_filename(source_path: str | Path, scale_mm: int) -> str:
 def safe_output_path(directory: str | Path, filename: str) -> Path:
     """Return a Path object, ensuring the directory exists.
 
-    Path-traversal guard (CodeQL py/path-injection pattern):
-      1. Normalise to an absolute string via os.path.realpath (collapses '..',
-         follows symlinks) — no Path() involved yet.
-      2. Check the normalised string with startswith against the two legitimate
-         writable roots (home dir, system temp).
-      3. Path() and mkdir() are called ONLY inside the branch where the
-         startswith check is True.  CodeQL's dataflow sees the sink as
-         unreachable from tainted data unless the guard has passed.
-      4. filename is reduced to a bare name with os.path.basename before join.
+    Uses the canonical CodeQL py/path-injection sanitisation pattern
+    (equivalent to their user_picture3 example):
+
+        fullpath = os.path.normpath(os.path.join(base_path, user_input))
+        if not fullpath.startswith(base_path + os.sep):
+            raise ...
+
+    The user-supplied value is treated as a path *relative to* the home
+    directory, then joined onto that fixed base before normalisation.
+    This means:
+      - Relative inputs ("Documents/standees") work as expected.
+      - Absolute inputs inside home ("/home/user/docs") also work because
+        os.path.join discards the base when the second arg is absolute,
+        and the startswith check still passes.
+      - Traversal attempts ("../../etc") and paths outside home ("/etc")
+        are rejected after normalisation.
+    If directory is blank the system temp directory (a constant, not
+    user-controlled) is used directly.
     """
     dir_str   = str(directory).strip()
     safe_name = os.path.basename(str(filename))   # strip any dir components
 
-    resolved_str = os.path.realpath(dir_str)      # string-level normalisation
-
-    home_root = os.path.realpath(os.path.expanduser("~"))
-    tmp_root  = os.path.realpath(tempfile.gettempdir())
-
-    # Path() and mkdir() are inside the True branch → CodeQL barrier guard.
-    if resolved_str.startswith(home_root) or resolved_str.startswith(tmp_root):
-        out_dir = Path(resolved_str)
+    # ── Blank → system temp (constant, no user input involved) ───────────────
+    if not dir_str:
+        out_dir = Path(tempfile.gettempdir())
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / safe_name
 
-    raise ValueError(
-        f"Output directory '{resolved_str}' must be inside your home folder "
-        f"({home_root}) or the system temp directory ({tmp_root})."
-    )
+    # ── Canonical CodeQL pattern: join onto fixed base → normpath → startswith
+    home_root = os.path.realpath(os.path.expanduser("~"))
+    fullpath  = os.path.normpath(os.path.join(home_root, dir_str))
+
+    # Append os.sep to avoid prefix collisions (/home/user vs /home/username).
+    if not fullpath.startswith(home_root + os.sep) and fullpath != home_root:
+        raise ValueError(
+            f"Output directory must be inside your home folder ({home_root}).\n"
+            f"Got: {fullpath}"
+        )
+
+    out_dir = Path(fullpath)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir / safe_name
 

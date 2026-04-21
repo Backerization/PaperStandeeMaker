@@ -243,20 +243,9 @@ def process_uploads(
     if not custom_filename.lower().endswith(".pdf"):
         custom_filename += ".pdf"
 
-    resolved_dir = os.path.realpath(output_dir.strip() or tempfile.gettempdir())
-    _allowed = (
-        os.path.realpath(os.path.expanduser("~")),
-        os.path.realpath(tempfile.gettempdir()),
-    )
-    if not any(resolved_dir.startswith(r) for r in _allowed):
-        return (
-            f"❌ Output directory must be inside your home folder or system temp.\n"
-            f"Resolved: {resolved_dir}",
-            None, [], "",
-        )
     if output_dir.strip():
         _save_config({"output_dir": output_dir.strip()})
-    out_path = safe_output_path(resolved_dir, custom_filename)
+    out_path = safe_output_path(output_dir.strip(), custom_filename)
 
     # ── Generate PDF ──────────────────────────────────────────────────────────
     try:

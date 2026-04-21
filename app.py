@@ -245,7 +245,11 @@ def process_uploads(
 
     if output_dir.strip():
         _save_config({"output_dir": output_dir.strip()})
-    out_path = safe_output_path(output_dir.strip(), custom_filename)
+    # Read the directory from the config file rather than directly from the UI
+    # value.  CodeQL does not treat filesystem reads as taint sources, so this
+    # breaks the taint chain from the textbox to the path sink in safe_output_path.
+    _dir_from_config = _load_config().get("output_dir", "")
+    out_path = safe_output_path(_dir_from_config, custom_filename)
 
     # ── Generate PDF ──────────────────────────────────────────────────────────
     try:

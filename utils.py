@@ -77,37 +77,32 @@ def auto_filename(source_path: str | Path, scale_mm: int) -> str:
 def safe_output_path(directory: str | Path, filename: str) -> Path:
     """Return a Path object, ensuring the directory exists.
 
-    Path-traversal is prevented at the string level — before any Path() call —
-    using the os.path.realpath + startswith guard that static analysers recognise
-    as a sanitiser (see CodeQL py/path-injection recommendation):
-
-      1. ``directory`` is normalised to an absolute string with os.path.realpath
-         (collapses '..' and resolves symlinks).
-      2. The resolved string is checked against the two writable roots every
-         desktop user legitimately needs: their home folder and the system temp
-         directory.  Anything else is rejected with a clear error.
-      3. ``filename`` is stripped down to a bare name (no separators) before
-         being joined, closing a second traversal vector.
+    Path-traversal guard (CodeQL py/path-injection pattern):
+      1. Normalise to an absolute string via os.path.realpath (collapses '..',
+         follows symlinks) — no Path() involved yet.
+      2. Check the normalised string with startswith against the two legitimate
+         writable roots (home dir, system temp).
+      3. Path() and mkdir() are called ONLY inside the branch where the
+         startswith check is True.  CodeQL's dataflow sees the sink as
+         unreachable from tainted data unless the guard has passed.
+      4. filename is reduced to a bare name with os.path.basename before join.
     """
     dir_str   = str(directory).strip()
-    safe_name = os.path.basename(str(filename))  # strip dir components; no Path() yet
+    safe_name = os.path.basename(str(filename))   # strip any dir components
 
-    # ── Normalise to absolute path at the *string* level ─────────────────────
-    resolved_str = os.path.realpath(dir_str)
+    resolved_str = os.path.realpath(dir_str)      # string-level normalisation
 
-    # ── Guard: reject paths outside the two writable roots ───────────────────
-    _allowed_roots = (
-        os.path.realpath(os.path.expanduser("~")),   # user home directory
-        os.path.realpath(tempfile.gettempdir()),      # system temp directory
+    home_root = os.path.realpath(os.path.expanduser("~"))
+    tmp_root  = os.path.realpath(tempfile.gettempdir())
+
+    # Path() and mkdir() are inside the True branch → CodeQL barrier guard.
+    if resolved_str.startswith(home_root) or resolved_str.startswith(tmp_root):
+        out_dir = Path(resolved_str)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / safe_name
+
+    raise ValueError(
+        f"Output directory '{resolved_str}' must be inside your home folder "
+        f"({home_root}) or the system temp directory ({tmp_root})."
     )
-    if not any(resolved_str.startswith(root) for root in _allowed_roots):
-        raise ValueError(
-            f"Output directory '{resolved_str}' must be inside your home folder "
-            f"or the system temp directory ({', '.join(_allowed_roots)})."
-        )
-
-    # ── Safe to construct Path now ────────────────────────────────────────────
-    out_dir = Path(resolved_str)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir / safe_name
 

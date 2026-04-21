@@ -73,8 +73,15 @@ def auto_filename(source_path: str | Path, scale_mm: int) -> str:
 
 
 def safe_output_path(directory: str | Path, filename: str) -> Path:
-    """Return a Path object, ensuring the directory exists."""
-    out_dir = Path(directory)
+    """Return a Path object, ensuring the directory exists.
+
+    Both directory and filename are sanitised to prevent path-traversal:
+      - directory is resolved to an absolute, normalised path (resolves '..' and symlinks).
+      - filename is reduced to its bare name component (strips any embedded separators or
+        directory segments such as '../../etc/passwd').
+    """
+    out_dir = Path(directory).resolve()          # normalise + make absolute
+    safe_name = Path(filename).name              # drop any directory parts from the filename
     out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir / filename
+    return out_dir / safe_name
 

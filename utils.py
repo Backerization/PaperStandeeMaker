@@ -4,6 +4,8 @@ utils.py – Constants, unit conversions, filename helpers.
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -75,13 +77,37 @@ def auto_filename(source_path: str | Path, scale_mm: int) -> str:
 def safe_output_path(directory: str | Path, filename: str) -> Path:
     """Return a Path object, ensuring the directory exists.
 
-    Both directory and filename are sanitised to prevent path-traversal:
-      - directory is resolved to an absolute, normalised path (resolves '..' and symlinks).
-      - filename is reduced to its bare name component (strips any embedded separators or
-        directory segments such as '../../etc/passwd').
+    Path-traversal is prevented at the string level — before any Path() call —
+    using the os.path.realpath + startswith guard that static analysers recognise
+    as a sanitiser (see CodeQL py/path-injection recommendation):
+
+      1. ``directory`` is normalised to an absolute string with os.path.realpath
+         (collapses '..' and resolves symlinks).
+      2. The resolved string is checked against the two writable roots every
+         desktop user legitimately needs: their home folder and the system temp
+         directory.  Anything else is rejected with a clear error.
+      3. ``filename`` is stripped down to a bare name (no separators) before
+         being joined, closing a second traversal vector.
     """
-    out_dir = Path(directory).resolve()          # normalise + make absolute
-    safe_name = Path(filename).name              # drop any directory parts from the filename
+    dir_str   = str(directory).strip()
+    safe_name = os.path.basename(str(filename))  # strip dir components; no Path() yet
+
+    # ── Normalise to absolute path at the *string* level ─────────────────────
+    resolved_str = os.path.realpath(dir_str)
+
+    # ── Guard: reject paths outside the two writable roots ───────────────────
+    _allowed_roots = (
+        os.path.realpath(os.path.expanduser("~")),   # user home directory
+        os.path.realpath(tempfile.gettempdir()),      # system temp directory
+    )
+    if not any(resolved_str.startswith(root) for root in _allowed_roots):
+        raise ValueError(
+            f"Output directory '{resolved_str}' must be inside your home folder "
+            f"or the system temp directory ({', '.join(_allowed_roots)})."
+        )
+
+    # ── Safe to construct Path now ────────────────────────────────────────────
+    out_dir = Path(resolved_str)
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / safe_name
 
